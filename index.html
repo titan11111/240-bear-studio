@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#fef3c7">
+    <meta name="description" content="3Dのくまを6つのモーションで動かし、毛色とリボンを着せ替えるブラウザ3Dスタジオ。">
+    <title>3Dくまさんスタジオ</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* iOS: bodyは manipulation、3D操作面は none の2段構え */
+        body { touch-action: manipulation; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
+        #canvas-container, #canvas-container canvas { touch-action: none; }
+        .sys-btn {
+            width: 44px; height: 44px; border-radius: 12px; background: #fff; color: #b45309;
+            display: grid; place-items: center; font-size: 15px; box-shadow: 0 1px 3px rgba(0,0,0,.12);
+            touch-action: manipulation; cursor: pointer; transition: background .15s, transform .1s;
+        }
+        .sys-btn:active { transform: translateY(2px); }
+        .sys-btn[aria-pressed="true"] { background: #fef3c7; color: #92400e; }
+        /* 毛色スウォッチは44pt未満だと親指で押せない */
+        .swatch { width: 44px; min-width: 44px; height: 44px; flex: 0 0 44px; border-radius: 12px; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); touch-action: manipulation; }
+        .swatch[aria-pressed="true"] { outline: 3px solid #f59e0b; outline-offset: 2px; }
+        header, footer { padding-top: env(safe-area-inset-top); }
+        footer { padding-bottom: env(safe-area-inset-bottom); }
+        body {
+            font-family: system-ui, -apple-system, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* Glassmorphism Styling */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+
+        .action-btn {
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .action-btn:hover {
+            transform: translateY(-2px) scale(1.03);
+        }
+        .action-btn:active {
+            transform: translateY(1px) scale(0.97);
+        }
+
+        .action-btn.active {
+            background-color: #f59e0b;
+            color: white;
+            box-shadow: 0 4px 14px 0 rgba(245, 158, 11, 0.4);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.05);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.2);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 h-screen w-screen relative">
+
+    <!-- Canvas Overlay Container -->
+    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+
+    <!-- UI Overlay Layer -->
+    <div class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 md:p-6">
+        
+        <!-- Header / Title -->
+        <header class="pointer-events-auto flex justify-between items-center">
+            <div class="glass-panel px-5 py-3 rounded-2xl shadow-lg flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center text-xl font-bold shadow-md">
+                    🐻
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-gray-800 leading-tight">3Dくまさんスタジオ</h1>
+                    <p class="text-xs text-amber-700 font-semibold">Interactive 3D Bear Animator</p>
+                </div>
+            </div>
+
+            <!-- System Controls -->
+            <div class="glass-panel p-1.5 rounded-2xl shadow-lg flex items-center gap-1.5">
+                <button type="button" id="btn-playpause" class="sys-btn" aria-label="アニメーション一時停止" aria-pressed="false">
+                    <span class="ico" aria-hidden="true">⏸</span>
+                </button>
+                <button type="button" id="btn-recenter" class="sys-btn" aria-label="視点を戻す">
+                    <span class="ico" aria-hidden="true">◎</span>
+                </button>
+            </div>
+
+            <!-- View Controls Info -->
+            <div class="hidden sm:flex glass-panel px-4 py-2 rounded-xl text-xs text-gray-600 gap-4 items-center">
+                <span><span class="ico" aria-hidden="true">↻</span>ドラッグ: 回転</span>
+                <span><span class="ico" aria-hidden="true">✥</span>右ドラッグ: 移動</span>
+                <span><span class="ico" aria-hidden="true">🔍</span>ホイール: ズーム</span>
+            </div>
+        </header>
+
+        <!-- Main Bottom Controls -->
+        <footer class="pointer-events-auto flex flex-col md:flex-row gap-4 justify-between items-end">
+            
+            <!-- Animation Actions Panel -->
+            <div class="glass-panel p-3 rounded-2xl shadow-xl w-full md:w-auto flex flex-wrap gap-2 justify-center items-center">
+                <button onclick="setAnimation('idle')" id="btn-idle" class="action-btn active px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">😌</span> 待機 (Idle)
+                </button>
+                <button onclick="setAnimation('walk')" id="btn-walk" class="action-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">🚶</span> トコトコ歩く
+                </button>
+                <button onclick="setAnimation('wave')" id="btn-wave" class="action-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">👋</span> 手を振る
+                </button>
+                <button onclick="setAnimation('dance')" id="btn-dance" class="action-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">🎵</span> ノリノリダンス
+                </button>
+                <button onclick="setAnimation('jump')" id="btn-jump" class="action-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">⚡</span> 大ジャンプ
+                </button>
+                <button onclick="setAnimation('sleep')" id="btn-sleep" class="action-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 bg-white text-gray-700 shadow-sm hover:bg-amber-50">
+                    <span class="ico" aria-hidden="true">💤</span> すやすや眠る
+                </button>
+            </div>
+
+            <!-- Customizer & Options Panel -->
+            <div class="glass-panel p-3 rounded-2xl shadow-xl w-full md:w-auto flex items-center justify-between md:justify-end gap-3">
+                <!-- Preset Colors -->
+                <div class="flex items-center gap-1.5 bg-white/60 p-1.5 rounded-xl">
+                    <span class="text-xs font-bold text-gray-600 px-2 swatch-label">毛色:</span>
+                    <button type="button" onclick="setBearPreset('brown')" id="sw-brown" class="swatch bg-[#8B5A2B]" title="ブラウン" aria-label="毛色 ブラウン" aria-pressed="false"></button>
+                    <button type="button" onclick="setBearPreset('polar')" id="sw-polar" class="swatch bg-[#F0F4F8]" title="シロクマ" aria-label="毛色 シロクマ" aria-pressed="false"></button>
+                    <button type="button" onclick="setBearPreset('panda')" id="sw-panda" class="swatch bg-gradient-to-r from-gray-900 to-gray-100" title="パンダ" aria-label="毛色 パンダ" aria-pressed="false"></button>
+                    <button type="button" onclick="setBearPreset('pink')" id="sw-pink" class="swatch bg-[#FFB6C1]" title="ピンク" aria-label="毛色 ピンク" aria-pressed="false"></button>
+                </div>
+
+                <!-- Bow Tie Toggle -->
+                <button id="toggle-bowtie" onclick="toggleBowtie()" class="px-3 py-2 bg-white text-gray-700 rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 hover:bg-amber-50 transition">
+                    <span class="ico" aria-hidden="true">🎀</span> リボンOnOff
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script>
+        let scene, camera, renderer, controls;
+        let bearGroup, headGroup, bodyGroup, armLeftGroup, armRightGroup, legLeftGroup, legRightGroup, earLeft, earRight, muzzle, tail;
+        let bowTieGroup;
+        // ---------- コントロールパネル：設定の保存（tg.<番号>.<key>） ----------
+        const LS = { anim: 'tg.240.anim', preset: 'tg.240.preset', bowtie: 'tg.240.bowtie' };
+        const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+        const lsSet = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) {} };
+        let animPaused = false;
+        let currentPreset = 'brown';
+        let currentAnimation = 'idle';
+        let animTime = 0;
+        let isPandaMode = false;
+
+        // Color Palettes
+        const COLOR_PRESETS = {
+            brown: { body: 0x8B5A2B, innerEar: 0xD2B48C, muzzle: 0xF5DEB3, belly: 0xE6C280, eye: 0x111111, nose: 0x221100, cheek: 0xFF9999 },
+            polar: { body: 0xF0F4F8, innerEar: 0xE1E8ED, muzzle: 0xFFFFFF, belly: 0xE8F0F8, eye: 0x1A202C, nose: 0x2D3748, cheek: 0xFFB6C1 },
+            panda: { body: 0xFFFFFF, arms: 0x1A1A1A, innerEar: 0x1A1A1A, muzzle: 0xFFFFFF, belly: 0xFFFFFF, eye: 0x111111, nose: 0x000000, cheek: 0xFF9999 },
+            pink:  { body: 0xFFB6C1, innerEar: 0xFFC0CB, muzzle: 0xFFF0F5, belly: 0xFFE4E1, eye: 0x3D1E28, nose: 0x6B2D5C, cheek: 0xFF69B4 }
+        };
+
+        // Current Applied Materials
+        let bearMaterials = {};
+
+        function createBear() {
+            bearGroup = new THREE.Group();
+
+            // Root Material Definitions
+            const defaultColors = COLOR_PRESETS.brown;
+            bearMaterials.body = new THREE.MeshStandardMaterial({ color: defaultColors.body, roughness: 0.8, metalness: 0.1 });
+            bearMaterials.belly = new THREE.MeshStandardMaterial({ color: defaultColors.belly, roughness: 0.9 });
+            bearMaterials.muzzle = new THREE.MeshStandardMaterial({ color: defaultColors.muzzle, roughness: 0.8 });
+            bearMaterials.innerEar = new THREE.MeshStandardMaterial({ color: defaultColors.innerEar, roughness: 0.9 });
+            bearMaterials.eye = new THREE.MeshStandardMaterial({ color: defaultColors.eye, roughness: 0.2 });
+            bearMaterials.nose = new THREE.MeshStandardMaterial({ color: defaultColors.nose, roughness: 0.3 });
+            bearMaterials.cheek = new THREE.MeshStandardMaterial({ color: defaultColors.cheek, roughness: 1.0, transparent: true, opacity: 0.6 });
+            bearMaterials.arm = bearMaterials.body; // Default body color for arms/legs
+            bearMaterials.bowtie = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.4 });
+
+            // 1. Body & Torso
+            bodyGroup = new THREE.Group();
+            const bodyGeo = new THREE.SphereGeometry(1.2, 32, 32);
+            bodyGeo.scale(1, 1.25, 0.95); // Slightly elongated belly
+            const bodyMesh = new THREE.Mesh(bodyGeo, bearMaterials.body);
+            bodyMesh.castShadow = true;
+            bodyMesh.receiveShadow = true;
+            bodyGroup.add(bodyMesh);
+
+            // Belly Patch
+            const bellyGeo = new THREE.SphereGeometry(0.85, 32, 32);
+            bellyGeo.scale(0.9, 1.1, 0.4);
+            const bellyMesh = new THREE.Mesh(bellyGeo, bearMaterials.belly);
+            bellyMesh.position.set(0, -0.1, 0.75);
+            bodyGroup.add(bellyMesh);
+
+            // Tail
+            const tailGeo = new THREE.SphereGeometry(0.3, 16, 16);
+            tail = new THREE.Mesh(tailGeo, bearMaterials.body);
+            tail.position.set(0, -0.8, -1.0);
+            tail.castShadow = true;
+            bodyGroup.add(tail);
+
+            bodyGroup.position.y = 1.9;
+            bearGroup.add(bodyGroup);
+
+            // 2. Head Group
+            headGroup = new THREE.Group();
+            headGroup.position.set(0, 1.6, 0.1); // Relative to body
+
+            const headGeo = new THREE.SphereGeometry(1.1, 32, 32);
+            headGeo.scale(1.1, 1.0, 1.05);
+            const headMesh = new THREE.Mesh(headGeo, bearMaterials.body);
+            headMesh.castShadow = true;
+            headGroup.add(headMesh);
+
+            // Muzzle (Snout)
+            const muzzleGeo = new THREE.SphereGeometry(0.45, 24, 24);
+            muzzleGeo.scale(1.1, 0.85, 0.9);
+            muzzle = new THREE.Mesh(muzzleGeo, bearMaterials.muzzle);
+            muzzle.position.set(0, -0.2, 0.85);
+            muzzle.castShadow = true;
+            headGroup.add(muzzle);
+
+            // Nose
+            const noseGeo = new THREE.SphereGeometry(0.16, 16, 16);
+            noseGeo.scale(1.2, 0.8, 1.0);
+            const nose = new THREE.Mesh(noseGeo, bearMaterials.nose);
+            nose.position.set(0, -0.12, 1.23);
+            headGroup.add(nose);
+
+            // Eyes & Highlights
+            const eyeGeo = new THREE.SphereGeometry(0.12, 16, 16);
+            const eyeHighlightGeo = new THREE.SphereGeometry(0.04, 8, 8);
+            const highlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+            // Left Eye
+            const eyeLeft = new THREE.Mesh(eyeGeo, bearMaterials.eye);
+            eyeLeft.position.set(-0.38, 0.12, 0.92);
+            const hlLeft = new THREE.Mesh(eyeHighlightGeo, highlightMat);
+            hlLeft.position.set(-0.35, 0.15, 1.02);
+            headGroup.add(eyeLeft);
+            headGroup.add(hlLeft);
+
+            // Right Eye
+            const eyeRight = new THREE.Mesh(eyeGeo, bearMaterials.eye);
+            eyeRight.position.set(0.38, 0.12, 0.92);
+            const hlRight = new THREE.Mesh(eyeHighlightGeo, highlightMat);
+            hlRight.position.set(0.41, 0.15, 1.02);
+            headGroup.add(eyeRight);
+            headGroup.add(hlRight);
+
+            // Cute Cheeks
+            const cheekGeo = new THREE.SphereGeometry(0.18, 16, 16);
+            cheekGeo.scale(1, 0.5, 0.3);
+            const cheekLeft = new THREE.Mesh(cheekGeo, bearMaterials.cheek);
+            cheekLeft.position.set(-0.55, -0.15, 0.88);
+            cheekLeft.rotation.z = -0.2;
+            const cheekRight = new THREE.Mesh(cheekGeo, bearMaterials.cheek);
+            cheekRight.position.set(0.55, -0.15, 0.88);
+            cheekRight.rotation.z = 0.2;
+            headGroup.add(cheekLeft);
+            headGroup.add(cheekRight);
+
+            // Ears
+            const createEar = (isRight) => {
+                const earG = new THREE.Group();
+                const outerGeo = new THREE.SphereGeometry(0.38, 24, 24);
+                outerGeo.scale(1, 1, 0.6);
+                const outerMesh = new THREE.Mesh(outerGeo, bearMaterials.body);
+                outerMesh.castShadow = true;
+                earG.add(outerMesh);
+
+                const innerGeo = new THREE.SphereGeometry(0.24, 20, 20);
+                innerGeo.scale(1, 1, 0.5);
+                const innerMesh = new THREE.Mesh(innerGeo, bearMaterials.innerEar);
+                innerMesh.position.z = 0.08;
+                earG.add(innerMesh);
+
+                const sign = isRight ? 1 : -1;
+                earG.position.set(sign * 0.8, 0.85, 0.1);
+                earG.rotation.z = sign * -0.3;
+                earG.rotation.y = sign * 0.2;
+                return earG;
+            };
+
+            earLeft = createEar(false);
+            earRight = createEar(true);
+            headGroup.add(earLeft);
+            headGroup.add(earRight);
+
+            // Accessories: Bow Tie
+            bowTieGroup = new THREE.Group();
+            const centerKnot = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), bearMaterials.bowtie);
+            const wingGeo = new THREE.ConeGeometry(0.25, 0.5, 16);
+            wingGeo.rotateZ(Math.PI / 2);
+            const leftWing = new THREE.Mesh(wingGeo, bearMaterials.bowtie);
+            leftWing.position.x = -0.22;
+            const rightWing = new THREE.Mesh(wingGeo, bearMaterials.bowtie);
+            rightWing.rotation.z = -Math.PI / 2;
+            rightWing.position.x = 0.22;
+
+            bowTieGroup.add(centerKnot);
+            bowTieGroup.add(leftWing);
+            bowTieGroup.add(rightWing);
+            bowTieGroup.position.set(0, -0.85, 0.95);
+            bowTieGroup.scale.set(1.2, 1.2, 1.2);
+            headGroup.add(bowTieGroup);
+
+            bodyGroup.add(headGroup);
+
+            // 3. Arms Rigging (Pivot at Shoulder)
+            const createArm = (isRight) => {
+                const armG = new THREE.Group();
+                // Shoulder Pivot Offset
+                const armMeshGroup = new THREE.Group();
+
+                const armGeo = new THREE.CylinderGeometry(0.28, 0.22, 1.2, 24);
+                armGeo.translate(0, -0.5, 0); // Center pivot at top of limb
+                const armMesh = new THREE.Mesh(armGeo, bearMaterials.arm);
+                armMesh.castShadow = true;
+                armMeshGroup.add(armMesh);
+
+                // Paw Hand Rounding
+                const pawGeo = new THREE.SphereGeometry(0.29, 20, 20);
+                const paw = new THREE.Mesh(pawGeo, bearMaterials.arm);
+                paw.position.y = -1.0;
+                paw.castShadow = true;
+                armMeshGroup.add(paw);
+
+                armG.add(armMeshGroup);
+                const sign = isRight ? 1 : -1;
+                armG.position.set(sign * 1.05, 0.7, 0);
+                armG.rotation.z = sign * -0.2;
+                return armG;
+            };
+
+            armLeftGroup = createArm(false);
+            armRightGroup = createArm(true);
+            bodyGroup.add(armLeftGroup);
+            bodyGroup.add(armRightGroup);
+
+            // 4. Legs Rigging (Pivot at Hip)
+            const createLeg = (isRight) => {
+                const legG = new THREE.Group();
+                const legMeshGroup = new THREE.Group();
+
+                const legGeo = new THREE.CylinderGeometry(0.32, 0.28, 1.1, 24);
+                legGeo.translate(0, -0.45, 0);
+                const legMesh = new THREE.Mesh(legGeo, bearMaterials.arm);
+                legMesh.castShadow = true;
+                legMeshGroup.add(legMesh);
+
+                // Foot Paw
+                const footGeo = new THREE.SphereGeometry(0.35, 20, 20);
+                footGeo.scale(0.9, 0.75, 1.3);
+                const footMesh = new THREE.Mesh(footGeo, bearMaterials.arm);
+                footMesh.position.set(0, -0.9, 0.15);
+                footMesh.castShadow = true;
+                legMeshGroup.add(footMesh);
+
+                // Foot Sole Pad (Cute Detail!)
+                const padGeo = new THREE.SphereGeometry(0.18, 16, 16);
+                padGeo.scale(1, 0.3, 1.2);
+                const padMesh = new THREE.Mesh(padGeo, bearMaterials.innerEar);
+                padMesh.position.set(0, -0.98, 0.2);
+                padMesh.rotation.x = 0.2;
+                legMeshGroup.add(padMesh);
+
+                legG.add(legMeshGroup);
+                const sign = isRight ? 1 : -1;
+                legG.position.set(sign * 0.55, -0.9, 0);
+                return legG;
+            };
+
+            legLeftGroup = createLeg(false);
+            legRightGroup = createLeg(true);
+            bodyGroup.add(legLeftGroup);
+            bodyGroup.add(legRightGroup);
+
+            scene.add(bearGroup);
+        }
+
+        function initScene() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xfef3c7);
+            scene.fog = new THREE.FogExp2(0xfef3c7, 0.035);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3.5, 8.5);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // 影＋トーンマッピングの塗り面積が支配的なので解像度で抑える
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.1;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI / 2 + 0.05; // Don't go below ground
+            controls.minDistance = 3;
+            controls.maxDistance = 15;
+            controls.target.set(0, 1.8, 0);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xfff5ea, 0.7);
+            scene.add(ambientLight);
+
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0xd97706, 0.4);
+            hemiLight.position.set(0, 20, 0);
+            scene.add(hemiLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            dirLight.position.set(5, 12, 7);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 512;
+            dirLight.shadow.mapSize.height = 512;
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 25;
+            dirLight.shadow.camera.left = -5;
+            dirLight.shadow.camera.right = 5;
+            dirLight.shadow.camera.top = 5;
+            dirLight.shadow.camera.bottom = -5;
+            dirLight.shadow.bias = -0.0005;
+            scene.add(dirLight);
+
+            // Warm Backlight
+            const backLight = new THREE.DirectionalLight(0xfde68a, 0.5);
+            backLight.position.set(-5, 6, -6);
+            scene.add(backLight);
+
+            // Environment Stage / Podium
+            const floorGeo = new THREE.CylinderGeometry(4, 4.3, 0.4, 64);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xffedd5, roughness: 0.6 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.position.y = -0.2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Cute Ground Decorative Ring
+            const ringGeo = new THREE.TorusGeometry(3.8, 0.05, 16, 64);
+            const ringMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3 });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = 0.01;
+            scene.add(ring);
+
+            // Floating Decorative Particles
+            const particlesGeo = new THREE.BufferGeometry();
+            const particleCount = 40;
+            const posArray = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount*3; i+=3) {
+                posArray[i] = (Math.random() - 0.5) * 12;
+                posArray[i+1] = Math.random() * 6 + 0.5;
+                posArray[i+2] = (Math.random() - 0.5) * 12;
+            }
+            particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const particleMat = new THREE.PointsMaterial({
+                size: 0.08,
+                color: 0xfbbf24,
+                transparent: true,
+                opacity: 0.7
+            });
+            const particles = new THREE.Points(particlesGeo, particleMat);
+            scene.add(particles);
+
+            // Build Bear
+            createBear();
+
+            // Window Resize Listener
+            window.addEventListener('resize', onWindowResize);
+            fitFraming(true);
+            controls.addEventListener('start', () => { framingLocked = true; });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            fitFraming();
+        }
+
+        // iPhone縦持ちは横視野が極端に狭くなる。全身が入る距離まで自動で引く。
+        // ユーザーがピンチで寄せた場合は邪魔しない（初期表示と視点リセットのときだけ効かせる）
+        const BEAR_HALF_WIDTH = 2.6, BEAR_HEIGHT = 4.4;
+        function framingDistance() {
+            const vFov = THREE.MathUtils.degToRad(camera.fov);
+            const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+            const dV = (BEAR_HEIGHT / 2) / Math.tan(vFov / 2);
+            const dH = (BEAR_HALF_WIDTH) / Math.tan(hFov / 2);
+            return Math.min(15, Math.max(controls.minDistance, Math.max(dV, dH) * 1.18));
+        }
+        let framingLocked = false; // 一度でも自分で動かしたらリサイズで勝手に戻さない
+        function fitFraming(force) {
+            if (framingLocked && !force) return;
+            const d = framingDistance();
+            const dir = new THREE.Vector3(0, 0.34, 1).normalize();
+            camera.position.copy(controls.target).add(dir.multiplyScalar(d));
+            controls.update();
+        }
+
+        function animateBear(deltaTime) {
+            animTime += deltaTime;
+
+            // Default Reset Poses (Smooth Interp Basis)
+            let targetBodyY = 1.9;
+            let targetBodyRotX = 0, targetBodyRotY = 0, targetBodyRotZ = 0;
+            let targetHeadRotX = 0, targetHeadRotY = 0, targetHeadRotZ = 0;
+            let targetArmL_X = 0, targetArmL_Z = -0.2;
+            let targetArmR_X = 0, targetArmR_Z = 0.2;
+            let targetLegL_X = 0, targetLegR_X = 0;
+            let earWiggle = Math.sin(animTime * 3) * 0.05;
+
+            // Mouse look-at subtle effect when idle
+            if (currentAnimation === 'idle') {
+                const bounce = Math.sin(animTime * 2) * 0.05;
+                targetBodyY = 1.9 + bounce;
+                
+                targetHeadRotX = Math.sin(animTime * 1.2) * 0.08;
+                targetHeadRotY = Math.cos(animTime * 0.8) * 0.12;
+
+                targetArmL_Z = -0.2 + Math.sin(animTime * 2) * 0.05;
+                targetArmR_Z = 0.2 - Math.sin(animTime * 2) * 0.05;
+            } 
+            else if (currentAnimation === 'walk') {
+                const speed = 7;
+                const walkCycle = Math.sin(animTime * speed);
+                
+                targetBodyY = 1.9 + Math.abs(Math.sin(animTime * speed * 2)) * 0.1;
+                targetBodyRotZ = Math.sin(animTime * speed) * 0.05;
+                targetHeadRotY = -Math.sin(animTime * speed) * 0.08;
+
+                // Alternate Limbs
+                targetLegL_X = walkCycle * 0.65;
+                targetLegR_X = -walkCycle * 0.65;
+                targetArmL_X = -walkCycle * 0.5;
+                targetArmR_X = walkCycle * 0.5;
+            } 
+            else if (currentAnimation === 'wave') {
+                targetBodyY = 1.9 + Math.sin(animTime * 3) * 0.03;
+                targetHeadRotZ = -0.15;
+                targetHeadRotY = -0.2;
+
+                // Right Arm Waving
+                targetArmR_Z = 2.4 + Math.sin(animTime * 10) * 0.35;
+                targetArmR_X = 0.2;
+
+                // Left Arm Idle
+                targetArmL_Z = -0.2;
+            } 
+            else if (currentAnimation === 'dance') {
+                const speed = 9;
+                targetBodyY = 1.9 + Math.abs(Math.sin(animTime * speed)) * 0.25;
+                targetBodyRotZ = Math.sin(animTime * (speed / 2)) * 0.25;
+                targetHeadRotX = Math.cos(animTime * speed) * 0.15;
+
+                targetArmL_Z = -1.2 + Math.sin(animTime * speed) * 0.5;
+                targetArmR_Z = 1.2 + Math.cos(animTime * speed) * 0.5;
+                targetArmL_X = Math.cos(animTime * speed) * 0.4;
+                targetArmR_X = Math.sin(animTime * speed) * 0.4;
+
+                targetLegL_X = Math.sin(animTime * speed) * 0.3;
+                targetLegR_X = -Math.sin(animTime * speed) * 0.3;
+            }
+            else if (currentAnimation === 'jump') {
+                const jumpCycle = Math.sin(animTime * 4);
+                if (jumpCycle > 0) {
+                    targetBodyY = 1.9 + jumpCycle * 1.2;
+                    targetArmL_Z = -2.4;
+                    targetArmR_Z = 2.4;
+                    targetLegL_X = 0.4;
+                    targetLegR_X = 0.4;
+                } else {
+                    targetBodyY = 1.9 + jumpCycle * 0.2; // Crouch before jump
+                    targetArmL_Z = -0.2;
+                    targetArmR_Z = 0.2;
+                    targetLegL_X = -0.2;
+                    targetLegR_X = -0.2;
+                }
+            }
+            else if (currentAnimation === 'sleep') {
+                targetBodyY = 1.1;
+                targetBodyRotX = 0.4; // Sitting/Curled
+                targetHeadRotX = 0.6;
+                targetHeadRotZ = 0.2;
+
+                targetArmL_X = 0.8;
+                targetArmL_Z = -0.1;
+                targetArmR_X = 0.8;
+                targetArmR_Z = 0.1;
+
+                targetLegL_X = -1.2;
+                targetLegR_X = -1.2;
+
+                // Breathing effect
+                const breathe = Math.sin(animTime * 2) * 0.04;
+                bodyGroup.scale.set(1 + breathe, 1 + breathe, 1 + breathe);
+            }
+
+            if (currentAnimation !== 'sleep') {
+                bodyGroup.scale.set(1, 1, 1);
+            }
+
+            // Smooth Interpolation (Lerp) towards target positions/rotations
+            const lerpFactor = 0.15;
+
+            bodyGroup.position.y += (targetBodyY - bodyGroup.position.y) * lerpFactor;
+            bodyGroup.rotation.x += (targetBodyRotX - bodyGroup.rotation.x) * lerpFactor;
+            bodyGroup.rotation.y += (targetBodyRotY - bodyGroup.rotation.y) * lerpFactor;
+            bodyGroup.rotation.z += (targetBodyRotZ - bodyGroup.rotation.z) * lerpFactor;
+
+            headGroup.rotation.x += (targetHeadRotX - headGroup.rotation.x) * lerpFactor;
+            headGroup.rotation.y += (targetHeadRotY - headGroup.rotation.y) * lerpFactor;
+            headGroup.rotation.z += (targetHeadRotZ - headGroup.rotation.z) * lerpFactor;
+
+            armLeftGroup.rotation.x += (targetArmL_X - armLeftGroup.rotation.x) * lerpFactor;
+            armLeftGroup.rotation.z += (targetArmL_Z - armLeftGroup.rotation.z) * lerpFactor;
+
+            armRightGroup.rotation.x += (targetArmR_X - armRightGroup.rotation.x) * lerpFactor;
+            armRightGroup.rotation.z += (targetArmR_Z - armRightGroup.rotation.z) * lerpFactor;
+
+            legLeftGroup.rotation.x += (targetLegL_X - legLeftGroup.rotation.x) * lerpFactor;
+            legRightGroup.rotation.x += (targetLegR_X - legRightGroup.rotation.x) * lerpFactor;
+
+            // Ear Wiggle
+            earLeft.rotation.z = -0.3 + earWiggle;
+            earRight.rotation.z = 0.3 - earWiggle;
+        }
+
+        function setAnimation(animName) {
+            currentAnimation = animName;
+            lsSet(LS.anim, animName);
+            if (animPaused) setPaused(false); // モーションを選んだら自動で再生に戻す
+
+            // Update UI Active states
+            const buttons = ['idle', 'walk', 'wave', 'dance', 'jump', 'sleep'];
+            buttons.forEach(name => {
+                const btn = document.getElementById(`btn-${name}`);
+                if (btn) {
+                    if (name === animName) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+            });
+        }
+
+        function setBearPreset(presetKey) {
+            const colors = COLOR_PRESETS[presetKey];
+            if (!colors) return;
+
+            isPandaMode = (presetKey === 'panda');
+            currentPreset = presetKey;
+            lsSet(LS.preset, presetKey);
+            ['brown', 'polar', 'panda', 'pink'].forEach((k) => {
+                const sw = document.getElementById('sw-' + k);
+                if (sw) sw.setAttribute('aria-pressed', k === presetKey ? 'true' : 'false');
+            });
+
+            // Animate transition of colors
+            bearMaterials.body.color.setHex(colors.body);
+            bearMaterials.innerEar.color.setHex(colors.innerEar);
+            bearMaterials.muzzle.color.setHex(colors.muzzle);
+            bearMaterials.belly.color.setHex(colors.belly);
+            bearMaterials.eye.color.setHex(colors.eye);
+            bearMaterials.nose.color.setHex(colors.nose);
+            bearMaterials.cheek.color.setHex(colors.cheek);
+
+            // Panda mode special limb color handling
+            if (isPandaMode) {
+                if (!bearMaterials.pandaLimb) {
+                    bearMaterials.pandaLimb = new THREE.MeshStandardMaterial({ color: colors.arms, roughness: 0.8 });
+                } else {
+                    bearMaterials.pandaLimb.color.setHex(colors.arms);
+                }
+
+                // Apply black limbs to arms, ears, and eye patches
+                armLeftGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.pandaLimb; });
+                armRightGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.pandaLimb; });
+                legLeftGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.pandaLimb; });
+                legRightGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.pandaLimb; });
+                earLeft.children[0].material = bearMaterials.pandaLimb;
+                earRight.children[0].material = bearMaterials.pandaLimb;
+            } else {
+                // Revert to body material
+                armLeftGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.body; });
+                armRightGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.body; });
+                legLeftGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.body; });
+                legRightGroup.traverse(child => { if(child.isMesh && child.material !== bearMaterials.innerEar) child.material = bearMaterials.body; });
+                earLeft.children[0].material = bearMaterials.body;
+                earRight.children[0].material = bearMaterials.body;
+            }
+        }
+
+        function toggleBowtie() {
+            if (bowTieGroup) {
+                bowTieGroup.visible = !bowTieGroup.visible;
+                lsSet(LS.bowtie, bowTieGroup.visible ? '1' : '0');
+                document.getElementById('toggle-bowtie').setAttribute('aria-pressed', bowTieGroup.visible ? 'true' : 'false');
+                const btn = document.getElementById('toggle-bowtie');
+                if (bowTieGroup.visible) {
+                    btn.classList.add('bg-amber-100', 'text-amber-800');
+                } else {
+                    btn.classList.remove('bg-amber-100', 'text-amber-800');
+                }
+            }
+        }
+
+        let clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 一時停止中は経過時間を0にして、ポーズを崩さずその場で止める
+            const deltaTime = animPaused ? 0 : clock.getDelta();
+
+            // Update Bear Rig Animation
+            animateBear(deltaTime);
+
+            // Orbit Controls update
+            controls.update();
+
+            // Render Frame
+            renderer.render(scene, camera);
+        }
+
+        // ---------- 一時停止 / 視点リセット ----------
+        function setPaused(v) {
+            animPaused = v;
+            const btn = document.getElementById('btn-playpause');
+            btn.setAttribute('aria-pressed', v ? 'true' : 'false');
+            btn.setAttribute('aria-label', v ? 'アニメーション再生' : 'アニメーション一時停止');
+            btn.innerHTML = v ? '<span class="ico" aria-hidden="true">▶</span>' : '<span class="ico" aria-hidden="true">⏸</span>';
+            if (!v) clock.getDelta(); // 再開時に溜まった時間を捨てる（瞬間移動を防ぐ）
+        }
+        function recenter() {
+            controls.target.set(0, 1.8, 0);
+            framingLocked = false;
+            fitFraming(true);
+        }
+        function restoreSettings() {
+            const preset = lsGet(LS.preset, 'brown');
+            if (COLOR_PRESETS[preset]) setBearPreset(preset);
+            else document.getElementById('sw-brown').setAttribute('aria-pressed', 'true');
+
+            const anim = lsGet(LS.anim, 'idle');
+            if (['idle', 'walk', 'wave', 'dance', 'jump', 'sleep'].includes(anim)) setAnimation(anim);
+
+            if (bowTieGroup) {
+                const want = lsGet(LS.bowtie, bowTieGroup.visible ? '1' : '0') === '1';
+                if (bowTieGroup.visible !== want) toggleBowtie();
+                else {
+                    // 表示は合っているがボタンの見た目と aria が初期値のままなので合わせる
+                    const btn = document.getElementById('toggle-bowtie');
+                    btn.setAttribute('aria-pressed', want ? 'true' : 'false');
+                    btn.classList.toggle('bg-amber-100', want);
+                    btn.classList.toggle('text-amber-800', want);
+                }
+            }
+        }
+        function bindControls() {
+            document.getElementById('btn-playpause').addEventListener('click', () => setPaused(!animPaused));
+            document.getElementById('btn-recenter').addEventListener('click', recenter);
+            addEventListener('keydown', (e) => {
+                if (e.code === 'KeyP' || e.code === 'Space') { e.preventDefault(); setPaused(!animPaused); }
+                if (e.code === 'KeyR') { e.preventDefault(); recenter(); }
+            });
+            // タブを離れたら止める（iPhoneの電池と発熱対策）
+            document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); });
+        }
+
+        // 全サブリソースを待つ window.onload ではなく DOM 構築時点で始める
+        function boot() {
+            initScene();
+            bindControls();
+            restoreSettings();
+            animate();
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+        else boot();
+    </script>
+</body>
+</html>
