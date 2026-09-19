@@ -19,3 +19,10 @@
   - ただし自動フィットは「起動時・リサイズ時・視点リセット時」だけにした。ユーザーがピンチで寄せた後に勝手に戻ると操作を奪う
 - 検証: harness PASS（43 RAF・タップ成功）／操作盤の機能テスト **25/25 PASS**（外部リクエスト0件、全身が画面内に収まる、設定3種の保存と復元を含む）
 - 未検証: iPhone 実機の発熱・FPS。絵文字アイコンのOS別の見え方。
+
+## 2026-09-19 旧エントリURLの404を修復
+- 症状: `https://titan11111.github.io/240-bear-studio/3d_bear_model_animator.html` が **404**。本体（`/240-bear-studio/`）は 200 で生きていた
+- 原因: エントリを `3d_bear_model_animator.html` → `index.html` へ改名したため、**改名前に配ったリンクだけが死んだ**
+- 対処: `3d_bear_model_animator.html` を index.html へのリダイレクト専用ページとして復活（meta refresh ＋ `location.replace()`。`?query`・`#hash` も引き継ぐ）
+- 検出元: `_tools/check-legacy-entry.sh`（245の同種事故を機に新設）。本番URLへcurlを撃って検出
+- 鉄則8: エントリ名を変えたら旧名をリダイレクトで必ず残す（本体URLが200のままなので気づけない）
